@@ -38,32 +38,6 @@ from config import device
 
 
 
-################################################################################
-############################# Utility functions  ###############################
-################################################################################
-
-
-
-
-
-class Pipe():
-    def __init__(self,data):
-        self.data = data
-    def clean_text(self,x):
-        pattern = r'[^a-zA-z0-9\s]'
-        re.sub(pattern, '', x)
-        return x
-    def clean_numbers(self,x):
-        if bool(re.search(r'\d', x)):
-            x = re.sub('[0-9]{5,}', '#####', x)
-            x = re.sub('[0-9]{4}', '####', x)
-            x = re.sub('[0-9]{3}', '###', x)
-            x = re.sub('[0-9]{2}', '##', x)
-        return x
-    def get_data(self):
-        return self.data
-
-
 def tokenise(sample):
     """
     Called before any processing of the text has occurred.
@@ -77,7 +51,6 @@ def preprocessing(sample):
     Called after tokenising but before numericalising.
     """
     
-    #processed = [word for word in sample if re.match("^[A-Za-z0-9!?]*$", word)] #only accept numbers, text, and some special characters
     processed = []
     for text in sample:
         # remove punctuation
@@ -97,7 +70,7 @@ def postprocessing(batch, vocab):
     return batch
 
 stopWords = {}
-wordVectors = GloVe(name='6B', dim=50)
+wordVectors = GloVe(name='6B', dim=300)
 
 ################################################################################
 ####### The following determines the processing of label data (ratings) ########
@@ -112,11 +85,11 @@ def convertNetOutput(ratingOutput, categoryOutput):
     outputs a different representation convert the output here.
     """
     # convert output label to actual
-    ratingOut = torch.round(ratingOutput)
+    ratingOut = torch.round(ratingOutput) # round to 1 or 0
     b,_ = ratingOutput.size()
     ratingOut = ratingOut.view(b).long()
 
-    #convert back to labels
+    #convert back to categorical int class
     pred_label = [int(torch.argmax(i)) for i in categoryOutput]
     pred_label = torch.Tensor(pred_label).long()
     return ratingOut, pred_label
@@ -137,8 +110,8 @@ class network(tnn.Module):
     def __init__(self):
         super(network, self).__init__()
         #lstm layer
-        embedding_dim = 50
-        hidden_dim = 32
+        embedding_dim = 300
+        hidden_dim = 54
         output_dim_multiclass = 5
         output_dim_sentiment = 1
         n_layers = 2
@@ -153,7 +126,7 @@ class network(tnn.Module):
         
         #dense layer multiclass
         self.fc_m = tnn.Linear(hidden_dim * 2, output_dim_multiclass)
-        # dense layer sentimen analysis
+        # dense layer sentiment analysis
         self.fc_s = tnn.Linear(hidden_dim * 2, output_dim_sentiment)
 
         #activation function
@@ -161,8 +134,7 @@ class network(tnn.Module):
 
 
     def forward(self, feed, length):
-        
-        #print("length:",length)
+
         # Multiclass classification
         packed_embedded = tnn.utils.rnn.pack_padded_sequence(feed, length,batch_first=True)
         _, (hidden, _) = self.lstm(packed_embedded)
@@ -173,7 +145,6 @@ class network(tnn.Module):
         hidden = torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1)
                 
         #hidden = [batch size, hid dim * num directions]
-        
         #dense multi
         dense_outputs_multi=self.fc_m(hidden)
         #dense sentiment
@@ -195,24 +166,12 @@ class loss(tnn.Module):
         self.entropy = tnn.CrossEntropyLoss()
 
     def forward(self, ratingOutput, categoryOutput, ratingTarget, categoryTarget):
-        # print("========= rating_pred:",ratingOutput)
-        # print("========= category_pred:",categoryOutput)
-        # print("========= rating_act:",ratingTarget)
-        # print("========= category_act:",categoryTarget)
-        #encode multiclass
 
-        #one_hot_class = torch.nn.functional.one_hot(categoryTarget).float()
-        
+        #encode multiclass
         one_hot_rating = ratingTarget.float().view(ratingOutput.size())
         #category_loss = self.entropy(categoryOutput,categoryTarget)
         category_loss = self.entropy(categoryOutput,categoryTarget.long())
         rating_loss = self.bce(ratingOutput,one_hot_rating)
-        
-
-        # print("category_out:",categoryOutput)
-        # print("category_act:",one_hot_class)
-        # print("cat_out_size:",categoryOutput.size())
-        # print("cat_act_size:",one_hot_class.size())
         
         return category_loss + rating_loss
 
@@ -228,5 +187,5 @@ lossFunc = loss()
 
 trainValSplit = 0.8
 batchSize = 32
-epochs = 10
-optimiser = toptim.Adam(net.parameters(), lr=0.001)
+epochs = 30
+optimiser = toptim.Adam(net.parameters(), lr=0.01)
