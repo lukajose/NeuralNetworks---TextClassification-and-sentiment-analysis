@@ -31,6 +31,42 @@ from torchtext.data.utils import get_tokenizer
 
 from config import device
 
+"""
+############################# QUESTION ###################################
+Briefly describe how your program works, and explain any design and training
+decisions you made along the way.
+
+The algorithm chosen to solve the classification and text sentiment is a Bidirectional LSTM. 
+Single LSTM was also implemented but was outperfomed by the ladder.
+Bi-LSTM was chosen for its flexibility to take different input length and have the ability to "remember" previous
+seen data situations that would suggest the type of text sentiment or class. CNN was considered but since 
+the maximum number of words in a document was unknown RNN was prefered. 
+
+Some simple preprocessing and tokenization was applied using standard libraries. No postprocessing was implemented.
+The tokenizer chosen was basic english, other tokenizers were implemented but the basic one performed better.
+A combination of different hyperparameters and methods were implemented such as
+    - Different number of layers 
+    - different glove dimensions
+    - number of hidden nodes 
+    - number of epochs
+    - different preprocessing stage
+    - optimizer (SGD vs ADAM)
+
+The best performance for the number of layers was 2 anything greater or lower decreased the performance.
+Increasing the number of Glove dimensions to 300 increased the accuracy by 3% but not surprisingly increased the time to train by twice as much.
+Increasing the number of hidden nodes increased the final accuracy by 1% - 2% on average. Other values 10, 32, 54 and 100 were considered but 54 outperformed all the others.
+The number of epochs was found to decrease the final accuracy and time of training so the default value of 10 was always considered with other hyperparameters.
+Different values were implemented 10, 20, 30, 40,50.
+
+A simple preprocessing approach was implemented, removing non - basic english characters. A dictionary with a big collection of stopWords was tested.
+However, it removed some critical information and affected the performance of the network. After looking at the data after tokenizing some custom preprocessing was applied
+to increase the performance, such as removing lengthy words, fixing some words such as dont, didnt, have and are but there were no significant results.
+
+For the optimizer simple SGD was first implemented. However, it was slower and less accurate than the Adam optimizer.
+
+##############################################################################
+"""
+
 ################################################################################
 ##### The following determines the processing of input data (review text) ######
 ################################################################################
@@ -50,6 +86,10 @@ def preprocessing(sample):
     """
     Called after tokenising but before numericalising.
     """
+    def reduce_lengthening(text):
+        pattern = re.compile(r"(.)\1{2,}")
+        return pattern.sub(r"\1\1", text)
+
     
     processed = []
     for text in sample:
@@ -59,7 +99,16 @@ def preprocessing(sample):
         text = re.sub(r' +', ' ', text)
         # remove newline
         text = re.sub(r'\n', ' ', text)
+        text = re.sub('ve', 'have', text)
+        text = re.sub('ll', 'all', text)
+        text = re.sub('re', 'are', text)
+        text = re.sub(r'(\bdon\b|\bdidn\b)', 'do not', text)
+        text = reduce_lengthening(text)
+        if text == 'do not':
+            processed.append('do')
+            text = 'not'
         processed.append(text)
+
     return processed
 
 def postprocessing(batch, vocab):
@@ -69,7 +118,8 @@ def postprocessing(batch, vocab):
 
     return batch
 
-stopWords = {}
+#stopWords = {'ourselves', 'hers', 'between', 'yourself', 'but', 'again', 'there', 'about', 'once', 'during', 'out', 'very', 'having', 'with', 'they', 'own', 'an', 'be', 'some', 'for', 'do', 'its', 'yours', 'such', 'into', 'of', 'most', 'itself', 'other', 'off', 'is', 's', 'am', 'or', 'who', 'as', 'from', 'him', 'each', 'the', 'themselves', 'until', 'below', 'are', 'we', 'these', 'your', 'his', 'through', 'don', 'nor', 'me', 'were', 'her', 'more', 'himself', 'this', 'down', 'should', 'our', 'their', 'while', 'above', 'both', 'up', 'to', 'ours', 'had', 'she', 'all', 'no', 'when', 'at', 'any', 'before', 'them', 'same', 'and', 'been', 'have', 'in', 'will', 'on', 'does', 'yourselves', 'then', 'that', 'because', 'what', 'over', 'why', 'so', 'can', 'did', 'not', 'now', 'under', 'he', 'you', 'herself', 'has', 'just', 'where', 'too', 'only', 'myself', 'which', 'those', 'i', 'after', 'few', 'whom', 't', 'being', 'if', 'theirs', 'my', 'against', 'a', 'by', 'doing', 'it', 'how', 'further', 'was', 'here', 'than'}
+stopWords ={'t','s'}
 wordVectors = GloVe(name='6B', dim=300)
 
 ################################################################################
@@ -85,7 +135,9 @@ def convertNetOutput(ratingOutput, categoryOutput):
     outputs a different representation convert the output here.
     """
     # convert output label to actual
-    ratingOut = torch.round(ratingOutput) # round to 1 or 0
+
+    # round to 1 or 0 and change the size to actuall output size
+    ratingOut = torch.round(ratingOutput) 
     b,_ = ratingOutput.size()
     ratingOut = ratingOut.view(b).long()
 
@@ -109,9 +161,9 @@ class network(tnn.Module):
 
     def __init__(self):
         super(network, self).__init__()
-        #lstm layer
+        #lstm layer define hyperparameters
         embedding_dim = 300
-        hidden_dim = 54
+        hidden_dim = 40
         output_dim_multiclass = 5
         output_dim_sentiment = 1
         n_layers = 2
@@ -126,9 +178,8 @@ class network(tnn.Module):
         
         #dense layer multiclass
         self.fc_m = tnn.Linear(hidden_dim * 2, output_dim_multiclass)
-        # dense layer sentiment analysis
+        # dense layer rating/sentiment
         self.fc_s = tnn.Linear(hidden_dim * 2, output_dim_sentiment)
-
         #activation function
         self.act = tnn.Sigmoid()
 
@@ -145,9 +196,9 @@ class network(tnn.Module):
         hidden = torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1)
                 
         #hidden = [batch size, hid dim * num directions]
-        #dense multi
+        #dense multiclass output
         dense_outputs_multi=self.fc_m(hidden)
-        #dense sentiment
+        #dense rating/sentiment output
         dense_outputs_senti=self.fc_s(hidden)
         #Final activation function multiclass
         categoryOutput=self.act(dense_outputs_multi)
@@ -169,10 +220,9 @@ class loss(tnn.Module):
 
         #encode multiclass
         one_hot_rating = ratingTarget.float().view(ratingOutput.size())
-        #category_loss = self.entropy(categoryOutput,categoryTarget)
         category_loss = self.entropy(categoryOutput,categoryTarget.long())
         rating_loss = self.bce(ratingOutput,one_hot_rating)
-        
+        #The loss is a combination of the rating and multiclass loss
         return category_loss + rating_loss
 
        
@@ -188,4 +238,4 @@ lossFunc = loss()
 trainValSplit = 0.8
 batchSize = 32
 epochs = 10
-optimiser = toptim.Adam(net.parameters(), lr=0.01)
+optimiser = toptim.Adam(net.parameters(), lr=0.01) #optimizer changed to adam
